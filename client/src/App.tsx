@@ -386,8 +386,14 @@ function ConditionForm({
 
   const start = useMutation({
     mutationFn: async (cond: Condition) => await api.startFromForm({ condition: cond }),
-    onSuccess: (res) => {
-      queryClient.invalidateQueries();
+    onSuccess: async (res) => {
+      // Refetch the state BEFORE switching tabs, and wait for it: the
+      // shell resolves a plan-set tab against the state, so switching
+      // while the new set is not in the state yet landed the viewer
+      // on the AI chat tab instead of the created set's plan tab.
+      // With the set already present, the switch goes straight to
+      // the plan tab and stays there.
+      await queryClient.refetchQueries({ queryKey: ["state"] });
       onStarted(res.setId);
     },
     onError: (e) => setError(e instanceof Error ? e.message : "作成を開始できませんでした。"),
@@ -557,7 +563,7 @@ function ConditionForm({
             id="budget"
             type="text"
             inputMode="numeric"
-            placeholder="例：50000"
+            placeholder="例：60000"
             aria-label="予算（円・チケット代込みの総額）"
             className={inputCls}
             value={budget}
@@ -995,8 +1001,16 @@ export function App() {
   const state = stateQuery.data;
   const activePlanSet =
     tab.type === "set" ? state?.planSets.find((s) => s.id === tab.id) : undefined;
+  // A plan-set tab whose set is not in the state YET (the state is
+  // still being refetched right after creation) must NOT fall back
+  // to the chat tab: the tab stays the set's, and the content area
+  // shows the loading line until the set arrives. The fallback to
+  // chat applies only once a completed fetch proves the set is
+  // really gone (e.g. it was deleted elsewhere).
   const effectiveTab: Tab =
-    tab.type === "set" && state && !activePlanSet ? { type: "chat" } : tab;
+    tab.type === "set" && state && !activePlanSet && !stateQuery.isFetching
+      ? { type: "chat" }
+      : tab;
 
   // Desktop drag/wheel sideways scrolling for the tab strip.
   const tabBarRef = useDragScroll<HTMLDivElement>();
@@ -1145,7 +1159,12 @@ export function App() {
               setPlanSlotBySet((prev) => ({ ...prev, [activePlanSet.id]: slot }))
             }
           />
-        ) : null}
+        ) : (
+          // A plan-set tab whose set has not arrived in the state yet
+          // (creation just started the switch): show the loading line
+          // here rather than dropping to the chat tab or a blank area.
+          <p className="px-4 py-10 text-center text-sm text-[var(--dim)]">読み込んでいます…</p>
+        )}
         {sendMutation.isPending ? (
           <div
             role="status"

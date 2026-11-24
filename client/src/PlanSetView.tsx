@@ -20,6 +20,16 @@ type Condition = SetDetail["condition"];
 type SubTab = "A" | "B" | "C";
 type Entry = { item: Row; color: string };
 
+// A row gets a map pin (and a pin number) only when it is a place the
+// party actually goes to AND it has coordinates. A purchase-event
+// row (kind "purchase") is an act — buying at that time — not a
+// place: it never carries a pin or a pin number, even if coordinates
+// somehow arrive with it. Pin numbers are therefore sequential over
+// the pinned rows alone, in the rows' (time) order.
+function rowHasPin(item: Row): item is Row & { lat: number; lng: number } {
+  return item.kind !== "purchase" && item.lat != null && item.lng != null;
+}
+
 const PLAN_COLORS: Record<SubTab, string> = {
   A: "var(--plan-a)",
   B: "var(--plan-b)",
@@ -437,10 +447,10 @@ function PlanMap({
     );
   };
 
-  const pinned = entries.filter((e) => e.item.lat != null && e.item.lng != null);
+  const pinned = entries.filter((e) => rowHasPin(e.item));
   // Indices (into `entries`) of pinned rows, so pin numbers match row numbers.
   const pinnedEntryIdx = entries
-    .map((e, i) => (e.item.lat != null && e.item.lng != null ? i : -1))
+    .map((e, i) => (rowHasPin(e.item) ? i : -1))
     .filter((i) => i >= 0);
 
   useEffect(() => {
@@ -609,6 +619,10 @@ function PlanMap({
       width: imgW,
       height: imgH,
       scale: 2,
+      // The map is always light (spec §15.2), the static fallback too:
+      // pin the image theme to light so a dark-mode device cannot
+      // turn the fallback map dark either.
+      theme: "light",
       markers: points
         .slice(0, 40)
         .map((p) => ({ position: [p.lat, p.lng] as [number, number] })),
@@ -802,7 +816,7 @@ function RowList({
         }
       : undefined;
   const pinNumber = (i: number): number =>
-    entries.slice(0, i + 1).filter((x) => x.item.lat != null && x.item.lng != null).length;
+    entries.slice(0, i + 1).filter((x) => rowHasPin(x.item)).length;
   return (
     <ol className="mt-3 space-y-2">
       {entries.map((e, i) => {
@@ -823,21 +837,11 @@ function RowList({
                 </span>
               </div>
               <div className="min-w-0 flex-1">
-                {/* The purchase row occupies a numbered pin like any
-                    other pinned row (its coordinates come from the
-                    target facility), so it carries the same pin-number
-                    badge as a regular row — the 🛒 marks the purchase,
-                    the number keeps the row↔pin correspondence. */}
+                {/* Purchase rows carry NO pin number: buying is an act
+                    at a time, not a place, so the row has no pin on
+                    the map and no number in the sequence. The 🛒 and
+                    the accent frame alone mark the purchase. */}
                 <p className="flex items-start gap-1.5 text-sm font-bold leading-snug">
-                  {showPinNumbers && item.lat != null && item.lng != null ? (
-                    <span
-                      aria-hidden
-                      className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white"
-                      style={{ background: e.color }}
-                    >
-                      {pinNumber(i)}
-                    </span>
-                  ) : null}
                   <span className="min-w-0">
                     🛒 DPA購入：{item.facilityName}
                     {item.price != null ? ` ${item.price.toLocaleString("ja-JP")}円` : ""}
@@ -934,7 +938,7 @@ function RowList({
             ref={setRef(i)}
             onClick={() => onRowTap?.(i)}
             className={`flex gap-3 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5${
-              item.lat != null && item.lng != null ? " cursor-pointer" : ""
+              rowHasPin(item) ? " cursor-pointer" : ""
             }`}
           >
             {/* Transit-guide layout: the time leads the row, large and
@@ -951,7 +955,7 @@ function RowList({
             </div>
             <div className="min-w-0 flex-1">
               <p className="flex items-start gap-1.5 text-base font-semibold leading-snug">
-                {showPinNumbers && item.lat != null && item.lng != null ? (
+                {showPinNumbers && rowHasPin(item) ? (
                   <span
                     aria-hidden
                     className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white"
@@ -1752,13 +1756,13 @@ export function PlanSetView({
   // remounted). Rows without coordinates have no pin to centre on.
   const handleRowTap = (entryIdx: number) => {
     const entry = entries[entryIdx];
-    if (!entry || entry.item.lat == null || entry.item.lng == null) {
+    if (!entry || !rowHasPin(entry.item)) {
       return;
     }
     const pinnedIdx =
       entries
         .slice(0, entryIdx + 1)
-        .filter((x) => x.item.lat != null && x.item.lng != null).length - 1;
+        .filter((x) => rowHasPin(x.item)).length - 1;
     try {
       mapControllerRef.current?.selectPlace?.(pinnedIdx);
     } catch {
@@ -1930,8 +1934,8 @@ export function PlanSetView({
         <div
           className={
             mapOff
-              ? "col-start-1 row-start-3 mt-2 min-w-0 px-4 lg:col-start-2 lg:row-start-1 lg:mt-0 lg:min-h-0 lg:px-0 lg:py-3"
-              : "col-start-1 row-start-3 mt-3 h-[32dvh] min-w-0 px-4 lg:col-start-2 lg:row-start-1 lg:row-span-3 lg:mt-0 lg:h-auto lg:min-h-0 lg:px-0 lg:py-3"
+              ? "map-always-light col-start-1 row-start-3 mt-2 min-w-0 px-4 lg:col-start-2 lg:row-start-1 lg:mt-0 lg:min-h-0 lg:px-0 lg:py-3"
+              : "map-always-light col-start-1 row-start-3 mt-3 h-[32dvh] min-w-0 px-4 lg:col-start-2 lg:row-start-1 lg:row-span-3 lg:mt-0 lg:h-auto lg:min-h-0 lg:px-0 lg:py-3"
           }
         >
           {!plan ? (

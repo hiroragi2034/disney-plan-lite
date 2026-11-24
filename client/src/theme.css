@@ -99,6 +99,41 @@
   isolation: isolate;
 }
 
+/* The map is ALWAYS shown in a light colour scheme (spec §15.2):
+   even when the device is in dark mode, the map itself — its tiles,
+   its built-in controls and scrollbars, and the app controls drawn
+   over it — never goes dark. Two mechanisms pin this:
+   1. `color-scheme: light` on the map container, so nothing inside
+      it (canvas-adjacent UI, attribution, scrollbars) is rendered
+      with the dark scheme.
+   2. The `.map-always-light` scope on the map's cell re-declares
+      the light values of the theme tokens, so the overlay controls
+      that read var(--surface) / var(--text) / var(--border) keep
+      their light appearance regardless of the page's scheme. The
+      live map's basemap style is likewise fixed to the runtime's
+      "light" style in map_helpers.mjs, and the static fallback
+      image is requested with the light theme. */
+.plan-map {
+  color-scheme: light;
+  background: #eef1ea;
+}
+.map-always-light {
+  color-scheme: light;
+  --surface: #fffdf8;
+  --surface-alt: #ece7db;
+  --text: #22304f;
+  --dim: #68738c;
+  --border: #ddd5c3;
+  --bg: #f3f0e9;
+}
+.map-always-light .maplibregl-ctrl-attrib {
+  background: rgba(255, 253, 248, 0.85);
+  color: #22304f;
+}
+.map-always-light .maplibregl-ctrl-attrib a {
+  color: #22304f;
+}
+
 /* Leaflet divIcon wrapper for the numbered pins: the visible pin is
    the .pin element inside, so the wrapper itself stays invisible
    (Leaflet's own .leaflet-div-icon white box is not used). */

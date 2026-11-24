@@ -676,7 +676,12 @@ export const Actions = {
             lat = ent ? ent.lat : lat;
             lng = ent ? ent.lng : lng;
           }
-          if (r.kind === "first10") {
+          if (r.kind === "first10" || r.kind === "purchase") {
+            // 購入イベント行は「その時刻に買う」行為であって行く場所では
+            // ないので、座標を持たない（仕様書第4節）。対象施設の座標を
+            // ここで付けると地図に同じ施設のピンが二重に出て、ピンの
+            // 番号も「行く場所の順番」でなくなる。読み取り時に外すので、
+            // 保存済みの既存セットもこの規則で表示される。
             lat = null;
             lng = null;
           }

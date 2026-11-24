@@ -374,6 +374,10 @@ function mountMetaPlaceListMap(container, options, onUnavailable) {
     // Engine-neutral base layer → this runtime's named styles:
     // "light" is the standard vector basemap, "esri-clarity" the
     // satellite-imagery style built from Esri World Imagery tiles.
+    // The standard style is ALWAYS "light" (spec §15.2): the map is
+    // shown in a light colour scheme even when the device is in
+    // dark mode, so this must never switch to the runtime's "dark"
+    // style (or be derived from prefers-color-scheme).
     baseStyle: baseLayer === 'satellite' ? 'esri-clarity' : 'light',
     ...(overlays.length > 0 ? { overlays } : {}),
     marker: (_place, index, selected) =>
