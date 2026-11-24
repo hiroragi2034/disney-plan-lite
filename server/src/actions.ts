@@ -67,6 +67,39 @@ function toMin(t: string): number {
   const [h = 0, m = 0] = t.split(":").map(Number);
   return h * 60 + m;
 }
+
+// 行の時間順（表示・保存の正規順序）。生成タスクが提出した配列順は信用せず、
+// 行の時刻そのものから機械的に並べ直す。購入行は購入時刻、それ以外の行は
+// 開始時刻をその行の時刻とする（片方が無ければもう一方で代用）。
+// 時刻を持たない行（移動行など）は、直前の行の時刻を引き継いでその直後に
+// 留まる（先頭で時刻が無い場合は次の時刻つき行の時刻を引き継ぐ）。
+// 同時刻の同点順位は first10 → 購入 → 通常行 → 移動行とし、それでも
+// 並ぶ場合は元の相対順を保つ（安定ソート）。
+type RowTimeLike = { kind: string; startTime: string | null; purchaseTime: string | null };
+function sortRowsByTime<T extends RowTimeLike>(rows: readonly T[]): T[] {
+  const keys: (number | null)[] = rows.map((r) => {
+    const t = r.kind === "purchase" ? (r.purchaseTime ?? r.startTime) : (r.startTime ?? r.purchaseTime);
+    return t ? toMin(t) : null;
+  });
+  let last: number | null = null;
+  for (let i = 0; i < keys.length; i++) {
+    const k = keys[i];
+    if (k != null) last = k;
+    else if (last != null) keys[i] = last;
+  }
+  let next: number | null = null;
+  for (let i = keys.length - 1; i >= 0; i--) {
+    const k = keys[i];
+    if (k != null) next = k;
+    else if (next != null) keys[i] = next;
+  }
+  const rank = (kind: string): number =>
+    kind === "first10" ? 0 : kind === "purchase" ? 1 : kind === "move" ? 3 : 2;
+  return rows
+    .map((r, i) => ({ r, i, k: keys[i] ?? 0, rank: rank(r.kind) }))
+    .sort((a, b) => a.k - b.k || a.rank - b.rank || a.i - b.i)
+    .map((x) => x.r);
+}
 function totalPeople(c: Condition): number {
   return c.adults + c.children.length;
 }
@@ -285,7 +318,7 @@ function generationTaskPrompt(setId: number, runId: number, mode: "create" | "re
     `3. アクション buildFacts（setId=${setId}）を呼ぶ。サーバーがファクト一式を構築・検証する。完全でない場合は材料を読み直して再取得し、再度 buildFacts を呼ぶ。`,
     `4. 混雑予想: congestionCache があればそれを使う。無ければ待ち時間参考サイト等で対象日の混雑を調査し（主軸=外部の混雑予想、補助=季節統計とチケット価格帯）、saveCongestion で段階(1〜5)と根拠と材料を保存する。推定待ち時間の材料も参考サイトから集める。取れないサイトは材料に使えなかった旨を根拠に含める。`,
     `5. 無理の判定（第8節）: 施設一覧に無い施設の要求、対象日に休止・公演なしが確定している施設の要求、最も緩い前提でも入園〜退園の枠に収まらない要求、直接矛盾する要求、のいずれかに当たる場合だけ、組み立てず failGeneration（impossibleCategory と impossibleDetail を付ける）で返す。予算は無理の判定に入れない。`,
-    `6. 3プラン（A=激混み前提、B=やや混み前提、C=思ったより空いてる前提）を組み立てる。単一の「重視する点」を全プラン共通で効かせる。DPAは購入イベント行（kind="purchase"）でのみ費用計上し、購入時刻を持たせ、60分ルールを守り、人気施設（推定待ちが大きい施設）ほど早く買う。全アトラクション行とショー行に推定待ち時間を持たせる。レストラン行に推定待ちは付けない。各プランに first10 行（抽選対象ショーと最初のDPA購入がある場合のみ）を入園直後に置く。落とした要求は droppedRequests に理由つきで列挙する。予算を超えるプランには budgetDisclosure を必ず付ける。`,
+    `6. 3プラン（A=激混み前提、B=やや混み前提、C=思ったより空いてる前提）を組み立てる。単一の「重視する点」を全プラン共通で効かせる。DPAは購入イベント行（kind="purchase"）でのみ費用計上し、購入時刻を持たせ、60分ルールを守り、人気施設（推定待ちが大きい施設）ほど早く買う。全アトラクション行とショー行に推定待ち時間を持たせる。レストラン行に推定待ちは付けない。各プランに first10 行（抽選対象ショーと最初のDPA購入がある場合のみ）を入園直後に置く。行は必ず時間順に並べる（購入行は購入時刻の位置に入れ、利用行とは別に並べる。購入行だけを先頭にまとめて置かない）。落とした要求は droppedRequests に理由つきで列挙する。予算を超えるプランには budgetDisclosure を必ず付ける。`,
     `7. submitPlans で提出する。検証で拒否されたら理由を読んで組み直し、再提出する（拒否されたまま終えない）。`,
     `8. 進捗は reportProgress（runId=${runId}）で工程ごとに記録する。`,
     mode === "replace"
@@ -628,7 +661,10 @@ export const Actions = {
       const planList = await db.select().from(schema.plans).where(eq(schema.plans.setId, set.id)).orderBy(asc(schema.plans.slot));
       const plansOut = [];
       for (const p of planList) {
-        const rowList = await db.select().from(schema.planRows).where(eq(schema.planRows.planId, p.id)).orderBy(asc(schema.planRows.ord));
+        // 表示順は保存された ord ではなく行の時刻から決める（時間順）。
+        // 時間順に直る前の順序で保存された既存セットも、ここで正しい
+        // 並びになる。移動行の前後判定もこの並び直しの後に行う。
+        const rowList = sortRowsByTime(await db.select().from(schema.planRows).where(eq(schema.planRows.planId, p.id)).orderBy(asc(schema.planRows.ord)));
         let moveTotal = 0;
         let walkTotal = 0;
         const rowsOut = rowList.map((r, i) => {
@@ -661,7 +697,7 @@ export const Actions = {
           }
           return {
             id: r.id,
-            ord: r.ord,
+            ord: i,
             kind: r.kind,
             facilityName: r.facilityName,
             startTime: r.startTime,
@@ -968,7 +1004,7 @@ export const Actions = {
         const op = await db.select().from(schema.plans).where(eq(schema.plans.setId, set.originSetId));
         const parts: string[] = [];
         for (const p of op) {
-          const rl = await db.select().from(schema.planRows).where(eq(schema.planRows.planId, p.id)).orderBy(asc(schema.planRows.ord));
+          const rl = sortRowsByTime(await db.select().from(schema.planRows).where(eq(schema.planRows.planId, p.id)).orderBy(asc(schema.planRows.ord)));
           parts.push(`プラン${p.slot}「${p.title}」: ` + rl.map((r) => `${r.startTime ?? ""} ${r.facilityName}`).join(" / "));
         }
         originPlans = parts.join("\n");
@@ -1251,10 +1287,13 @@ export const Actions = {
       if (slots !== "ABC") return { accepted: false, errors: ["プランはA・B・Cの3つを提出してください"] };
       const fmap = await facilityMap(ctx, cond.park);
       const moves = await moveTable(ctx, cond.park);
+      // 提出された行は時間順に並べ直してから検証・保存する（購入行は購入
+      // 時刻の位置）。生成側の配列順に依存しないための機械的な正規化。
+      const plans = args.plans.map((p) => ({ ...p, rows: sortRowsByTime(p.rows) }));
       const allErrors: string[] = [];
       const allUnconfirmed: string[] = [];
       const totals = new Map<string, { move: number; walk: number }>();
-      for (const plan of args.plans) {
+      for (const plan of plans) {
         const v = await validatePlan(ctx, cond, plan, args.factSetId, args.dayData, fmap, moves);
         allErrors.push(...v.errors);
         allUnconfirmed.push(...v.unconfirmed.map((u) => `プラン${plan.slot}: ${u}`));
@@ -1268,7 +1307,7 @@ export const Actions = {
         await db.delete(schema.planRows).where(eq(schema.planRows.planId, ep.id));
         await db.delete(schema.plans).where(eq(schema.plans.id, ep.id));
       }
-      for (const plan of args.plans) await persistPlan(ctx, set.id, plan, fmap);
+      for (const plan of plans) await persistPlan(ctx, set.id, plan, fmap);
 
       // 検証の記録（第9.3節）
       let factInfo: Record<string, unknown> = { factSetId: args.factSetId, complete: false };
@@ -1334,14 +1373,16 @@ export const Actions = {
       const cond = JSON.parse(set.conditionJson) as Condition;
       const fmap = await facilityMap(ctx, cond.park);
       const moves = await moveTable(ctx, cond.park);
-      const v = await validatePlan(ctx, cond, args.plan, args.factSetId, args.dayData, fmap, moves);
+      // submitPlans と同じく、行は時間順に並べ直してから検証・保存する。
+      const plan = { ...args.plan, rows: sortRowsByTime(args.plan.rows) };
+      const v = await validatePlan(ctx, cond, plan, args.factSetId, args.dayData, fmap, moves);
       if (v.errors.length > 0) return { accepted: false, errors: v.errors };
       const existing = await db.select().from(schema.plans).where(and(eq(schema.plans.setId, set.id), eq(schema.plans.slot, args.plan.slot)));
       for (const ep of existing) {
         await db.delete(schema.planRows).where(eq(schema.planRows.planId, ep.id));
         await db.delete(schema.plans).where(eq(schema.plans.id, ep.id));
       }
-      await persistPlan(ctx, set.id, args.plan, fmap);
+      await persistPlan(ctx, set.id, plan, fmap);
       let verification: Record<string, unknown> = {};
       try {
         verification = set.verificationJson ? (JSON.parse(set.verificationJson) as Record<string, unknown>) : {};

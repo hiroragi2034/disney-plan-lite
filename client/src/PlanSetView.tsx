@@ -59,11 +59,15 @@ const SCENARIO_SHORT_LABELS: Record<SubTab, string> = {
   C: "楽",
 };
 
-// Handle to the mounted map. selectPlace highlights a pin; panTo moves
-// the camera on the LIVE map with an animated pan (easeTo with a new
-// centre only), so the zoom the user currently has is preserved —
-// the map is never remounted to move it. panTo returns false while the
-// map is still initialising, so callers may retry once.
+// Handle to the mounted map. selectPlace highlights a pin and
+// centres the live map on that place (the map layer writes the two
+// together so a render flushed between selection and pan cannot
+// apply a stale centre); panTo centres the LIVE map on an arbitrary
+// target (e.g. the viewer's own position) at the map layer's fixed
+// focus zoom — the runtime cannot report the current zoom, so it
+// cannot be preserved — and the map is never remounted to move it.
+// panTo returns false only for an invalid target; callers still keep
+// a one-shot retry as a safety net.
 type MapController = {
   selectPlace?: (index: number) => void;
   panTo?: (target: { lat: number; lng: number }) => boolean;
@@ -493,8 +497,9 @@ function PlanMap({
     // happens here.
     // A fresh 現在地 position remounts the map (the dot overlay is
     // part of the mount options); once mounted, centre on the viewer.
-    // panTo returns false while the map is still initialising, so
-    // retry on a short ladder — the same pattern row taps use.
+    // The pan is issued on a short ladder as a safety net, in case
+    // the first call lands before the new map's first render — the
+    // same pattern row taps use.
     let panTimers: number[] = [];
     if (pendingPanRef.current && userLocation) {
       pendingPanRef.current = false;
@@ -818,10 +823,26 @@ function RowList({
                 </span>
               </div>
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-bold leading-snug">
-                  🛒 DPA購入：{item.facilityName}
-                  {item.price != null ? ` ${item.price.toLocaleString("ja-JP")}円` : ""}
-                  {item.targetCount != null ? ` × ${item.targetCount}人` : ""}
+                {/* The purchase row occupies a numbered pin like any
+                    other pinned row (its coordinates come from the
+                    target facility), so it carries the same pin-number
+                    badge as a regular row — the 🛒 marks the purchase,
+                    the number keeps the row↔pin correspondence. */}
+                <p className="flex items-start gap-1.5 text-sm font-bold leading-snug">
+                  {showPinNumbers && item.lat != null && item.lng != null ? (
+                    <span
+                      aria-hidden
+                      className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white"
+                      style={{ background: e.color }}
+                    >
+                      {pinNumber(i)}
+                    </span>
+                  ) : null}
+                  <span className="min-w-0">
+                    🛒 DPA購入：{item.facilityName}
+                    {item.price != null ? ` ${item.price.toLocaleString("ja-JP")}円` : ""}
+                    {item.targetCount != null ? ` × ${item.targetCount}人` : ""}
+                  </span>
                 </p>
                 <p className="mt-0.5 text-xs leading-relaxed text-[var(--dim)]">
                   購入は1回に1枚だけ。買えなかったら、その後の予定の組み直しが必要になる分岐点です。
@@ -1726,10 +1747,9 @@ export function PlanSetView({
     detailTab === "crowd" && set.congestion == null ? "schedule" : detailTab;
 
   // Tapping a schedule row moves the map to that row's place: the pin
-  // is highlighted via the handle, and the LIVE map pans to the place
-  // with an animated easeTo that changes only the centre — the current
-  // zoom is kept exactly as the user left it, and the map is not
-  // remounted. Rows without coordinates have no pin to centre on.
+  // is highlighted via the handle, and the LIVE map jumps to centre
+  // on the place (at the map layer's fixed focus zoom; the map is not
+  // remounted). Rows without coordinates have no pin to centre on.
   const handleRowTap = (entryIdx: number) => {
     const entry = entries[entryIdx];
     if (!entry || entry.item.lat == null || entry.item.lng == null) {

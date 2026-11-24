@@ -17,10 +17,16 @@
 //
 //   handle.destroy()                 tear the map down
 //   handle.selectPlace(index)        highlight the pin for a place
-//   handle.panTo({ lat, lng })       animated pan, current zoom kept;
-//                                    false while the map is not ready
-//                                    (the caller retries once, later)
-//   handle.getZoom()                 current zoom, or null
+//                                    and centre the live map on it
+//                                    (the two are written together;
+//                                    see steerCamera in
+//                                    mountMetaPlaceListMap)
+//   handle.panTo({ lat, lng })       centre the live map on a place;
+//                                    false only for an invalid target
+//                                    (how this works on a runtime
+//                                    whose handle has no camera
+//                                    method: see mountMetaPlaceListMap)
+//   handle.getZoom()                 the focus zoom panTo set, or null
 //   handle.refreshSize()             re-measure the container and
 //                                    re-render at its real size
 //
@@ -332,10 +338,24 @@ function attachMetaMarkerTapSelection(container, map, highlight) {
   };
 }
 
+// The zoom a pan centres the map at: the same level the runtime's
+// initial fitBounds caps at (maxZoom 16), so a focused place and its
+// surroundings stay readable and a tap never zooms in past the
+// framing the map opened with.
+const FOCUS_ZOOM = 16;
+
 // For short place lists. Style .pin, .pin--on, and the selected row class.
 function mountMetaPlaceListMap(container, options, onUnavailable) {
   const { rows, selectedClass = 'map-selected', userLocation, baseLayer, ...mapOptions } = options;
+  // The selection as this layer last saw it, from either direction
+  // (row tap via the handle, pin tap via onSelectPlace). panTo needs
+  // it to restore the selection after forcing a re-render.
+  let selectedIndex = null;
+  // Alternates on every pan so the zoom value written into the mount
+  // options always changes (see panTo).
+  let focusZoomFlip = false;
   const highlight = (index, scroll) => {
+    selectedIndex = index;
     rows.forEach((row, i) => row.classList.toggle(selectedClass, i === index));
     if (scroll && index !== null) {
       rows[index].scrollIntoView({ block: 'nearest' });
@@ -343,7 +363,13 @@ function mountMetaPlaceListMap(container, options, onUnavailable) {
   };
   const overlays = [...(mapOptions.overlays ?? [])];
   if (userLocation) overlays.push(userLocationOverlay(userLocation));
-  const map = mountMap(container, {
+  // The exact options object handed to the runtime. It must reach
+  // HatchMaps.mountMap as THIS object, never a spread copy, because
+  // panTo steers the camera through it (see panTo below) — so this
+  // implementation calls the runtime directly and inlines the two
+  // fields the mountMap() helper would otherwise add by spreading
+  // (clientId, onFatalError).
+  const liveOptions = {
     ...mapOptions,
     // Engine-neutral base layer → this runtime's named styles:
     // "light" is the standard vector basemap, "esri-clarity" the
@@ -353,7 +379,14 @@ function mountMetaPlaceListMap(container, options, onUnavailable) {
     marker: (_place, index, selected) =>
       `<div class="pin${selected ? ' pin--on' : ''}">${index + 1}</div>`,
     onSelectPlace: index => highlight(index, true),
-  }, onUnavailable);
+    clientId: 'artifact_web',
+    onFatalError: onUnavailable,
+  };
+  if (!metaMapSupported()) {
+    onUnavailable();
+    return null;
+  }
+  const map = globalThis.HatchMaps.mountMap(container, liveOptions);
   if (map === null) return null;
   // The layer's own pin-tap detection (see above): wraps the
   // runtime handle so teardown removes the container listeners
@@ -363,7 +396,102 @@ function mountMetaPlaceListMap(container, options, onUnavailable) {
     map,
     highlight,
   );
+  // The places this map was mounted with, in pin order: selectPlace
+  // steers the camera to the selected place (see steerCamera).
+  const placesList = Array.isArray(mapOptions.places)
+    ? mapOptions.places
+    : [];
+  // Bumped on every camera steer and on teardown: a deferred
+  // selection restore or re-steer whose token is stale does nothing.
+  let panSeq = 0;
+  // Steer the camera to `target`, leaving `restoreIndex` selected.
+  //
+  // Camera control on this runtime — the reason row taps used to
+  // highlight the pin but never move the map. The runtime handle
+  // exposes ONLY destroy() and selectPlace(index): there is no
+  // panTo/getZoom on it, and an earlier implementation's
+  // `map.panTo?.(target) ?? false` therefore returned false on every
+  // tap, forever. (Verified against the bundled runtime: its
+  // mountMap returns exactly { destroy, selectPlace }.)
+  //
+  // The one camera channel the runtime does have is its view state:
+  // the component it renders re-reads `center` and `zoom` from the
+  // exact options object it was mounted with (liveOptions) on every
+  // render, and an inner effect jumpTo()s the live MapLibre map
+  // whenever those values change. Steering therefore means: write
+  // the target into liveOptions, then make a render happen that
+  // cannot be skipped. Two measured failure modes shape HOW:
+  //
+  //   1. One tap behind (touch). A row tap reaches this layer twice:
+  //      the row's native click listener (this layer's own, below)
+  //      selects, then the app's React onClick pans. With touch
+  //      input the runtime can flush the selection's render BETWEEN
+  //      the two, while liveOptions.center still holds the PREVIOUS
+  //      tap's target — the map then flies to the previous row's pin
+  //      (the owner's "違う番号に飛ぶ"), and the pan that follows is
+  //      lost to failure mode 2. Countermeasure: selectPlace writes
+  //      the selected place's centre into liveOptions in the SAME
+  //      call as the selection, so whichever render flushes first
+  //      already carries the right centre.
+  //   2. The bailout (any input). Toggling the selection away and
+  //      back within one task batches into a single render whose
+  //      final selection equals the current one; with the options
+  //      object reference-identical, React skips the render entirely
+  //      and the written centre is never read — a pan whose selection
+  //      does not change (re-tapping the selected row after panning
+  //      by hand, the 現在地 pan) silently did nothing. Reproduced
+  //      in a real browser against this layer's real code.
+  //      Countermeasure: the toggle steps the selection away NOW and
+  //      restores it in a FOLLOWING task, so the render that reads
+  //      the new centre is a genuine selection change.
+  //
+  // The zoom alternates by an invisible ±0.002 around the focus
+  // zoom: the view effect keys on the zoom VALUE, so that refires it
+  // even when the target equals the current centre. The runtime
+  // offers no way to read the live zoom back, so a pan sets the
+  // fixed focus zoom rather than preserving the viewer's zoom.
+  // (selectPlace through the runtime handle does not fire
+  // onSelectPlace, so none of this disturbs the row highlight; the
+  // worst case is a one-frame pin flicker.)
+  const steerCamera = (target, restoreIndex) => {
+    liveOptions.center = { lat: target.lat, lng: target.lng };
+    focusZoomFlip = !focusZoomFlip;
+    liveOptions.zoom = FOCUS_ZOOM + (focusZoomFlip ? 0.002 : 0);
+    const token = ++panSeq;
+    const toggle = () => {
+      try {
+        map.selectPlace?.(restoreIndex === null ? 0 : null);
+      } catch {
+        /* the re-render trigger is best-effort */
+      }
+      setTimeout(() => {
+        if (token !== panSeq) return;
+        try {
+          map.selectPlace?.(restoreIndex);
+        } catch {
+          /* the restore is best-effort */
+        }
+      }, 0);
+    };
+    toggle();
+    // A pan issued while the MapLibre map does not exist yet (its
+    // style is still loading — the canvas element is the tell) can
+    // be consumed by a render that reaches no map. Re-steer on a
+    // short ladder so the pan lands once the map is there; the
+    // token keeps a newer pan from being overridden by the ladder.
+    if (!container.querySelector('.maplibregl-canvas')) {
+      [450, 1300].forEach(delay => {
+        setTimeout(() => {
+          if (token !== panSeq) return;
+          focusZoomFlip = !focusZoomFlip;
+          liveOptions.zoom = FOCUS_ZOOM + (focusZoomFlip ? 0.002 : 0);
+          toggle();
+        }, delay);
+      });
+    }
+  };
   const teardown = fn => {
+    panSeq += 1;
     detachTapSelection();
     try {
       fn?.();
@@ -379,13 +507,54 @@ function mountMetaPlaceListMap(container, options, onUnavailable) {
       teardown(() => map.remove?.());
     },
     selectPlace(index) {
-      map.selectPlace?.(index);
+      selectedIndex = index;
+      // Selecting a place also centres the camera on it, written in
+      // the SAME call as the selection (steerCamera's note, failure
+      // mode 1): on touch devices a render can flush between this
+      // selection and the caller's own panTo, and that render must
+      // already find this place's centre in liveOptions.
+      const place =
+        typeof index === 'number' ? placesList[index] : undefined;
+      if (
+        place &&
+        typeof place.lat === 'number' &&
+        typeof place.lng === 'number' &&
+        Number.isFinite(place.lat) &&
+        Number.isFinite(place.lng)
+      ) {
+        steerCamera({ lat: place.lat, lng: place.lng }, index);
+      } else {
+        try {
+          map.selectPlace?.(index);
+        } catch {
+          /* selection is best-effort */
+        }
+      }
     },
     panTo(target) {
-      return map.panTo?.(target) ?? false;
+      if (
+        !target ||
+        typeof target.lat !== 'number' ||
+        typeof target.lng !== 'number' ||
+        !Number.isFinite(target.lat) ||
+        !Number.isFinite(target.lng)
+      ) {
+        return false;
+      }
+      // Steer to an arbitrary target (the viewer's own position is
+      // the caller that is not a place in the list), keeping the
+      // current selection. How this works — and why it is built the
+      // way it is — is steerCamera's note above.
+      steerCamera(
+        { lat: target.lat, lng: target.lng },
+        selectedIndex,
+      );
+      return true;
     },
     getZoom() {
-      return map.getZoom?.() ?? null;
+      // The runtime handle has no getZoom; the only zoom this layer
+      // ever knows is the focus zoom panTo set itself.
+      return liveOptions.zoom ?? null;
     },
     refreshSize() {
       // The MapLibre runtime tracks its container's size itself;
