@@ -1,0 +1,8 @@
+{
+  "entry": "client/dist/index.html",
+  "managedCronJobs": [],
+  "name": "我が家のディズニー計画",
+  "platformVersion": 31,
+  "runtime": "typescript",
+  "slug": "disney-plan-lite"
+}
