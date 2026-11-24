@@ -23,8 +23,12 @@
 **Delivered by**: generation task only for coordinates of new facilities missing from the dictionary (§4.1), candidates restricted to the park bounding boxes in the spec
 **Checked with**: spec §4.1 coordinate range checks (land lat 35.618–35.652, sea lat 35.608–35.645, lng 139.862–139.902)
 ### OpenStreetMap map tiles
-**Delivered by**: client map (Leaflet) on plan tabs; pins only for rows with coordinates, numbered in time order (§2)
+**Delivered by**: client map on plan tabs via this app's hatch-maps mechanism (platform map component); pins only for rows with coordinates, numbered in time order (§2). If the platform map cannot run, a Meta static-map image of the same pins is the fallback.
 **Checked with**: maps reference pattern (real interactive map, not hand-drawn)
+
+## UI parts port (2026-11-24 edit)
+- Client UI rebuilt from `~/workspace/disney-app/distribution-lite/ui-parts/` (PARTS.md + 17 part files cut from the home app) and spec §15: theme.css is byte-identical to part 01; index.html follows part 02 (title; the root slug attribute stays this artifact's own). All other parts were adapted to this server's existing action/response shapes — server code untouched.
+- Not carried (reported in the build report): the home map layer's vendored-Leaflet engine (this app has no Leaflet files; the map runs on hatch-maps only, with the static-image fallback), PDF buttons/preview, facility photos, same-day search UI/tabs, debug/task-manager tabs, and home-only displays whose data this server does not return (per-plan progress, restaurant classification, wait-site check metadata, prompt version, verification package, 「条件を変えて再検索」 — no save-only conditions action exists here).
 
 ## Long-term data behavior
 - **Refresh policy**: Canonical snapshots reusable within 3 hours except the dated daily page, which is fetched fresh every generation (§5.2). Facts are rebuilt per generation run; the gate always references the newest complete fact set of that run (§9.1). Congestion forecasts are reused per park+date once decided (§6).

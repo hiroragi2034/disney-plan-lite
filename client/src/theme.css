@@ -1,9 +1,5 @@
-/* Web-font slot: uncomment the line below and put your font there. A web-font
-   @import must come before the Tailwind import — an @import placed after any
-   other rule is a build error, and it is reported against a line number in the
-   expanded Tailwind output, far past the end of this file, so the message
-   cannot point you at the mistake. */
-/* @import url('https://fonts.googleapis.com/css2?family=Your+Font:wght@400..700&display=swap'); */
+/* Web-font slot: system Japanese rounded gothic stacks are used instead of a
+   downloaded font (see .font-display below), so no @import is needed. */
 @import "tailwindcss";
 @import "tailwindcss-safe-area";
 
@@ -30,15 +26,27 @@
 
 :root {
   color-scheme: light dark;
-  --bg: #faf7f2;
-  --surface: #ffffff;
-  --text: #1c2420;
-  --dim: #5f6d66;
-  --border: #e3ddd2;
-  --accent: #0f766e;
-  --radius: 12px;
+  --bg: #f3f0e9;
+  --surface: #fffdf8;
+  --surface-alt: #ece7db;
+  --text: #22304f;
+  --dim: #68738c;
+  --border: #ddd5c3;
+  --accent: #e4572e;
+  --accent-text: #ffffff;
+  /* Row/pin selection highlight. Deliberately NOT the accent orange:
+     the DPA購入 cards already wear a permanent orange frame, so a
+     selected row outlined in the same orange was indistinguishable
+     from them (owner report). Blue — the same blue as the 現在地
+     dot — reads as "the one you picked" and clashes with none of
+     the plan colours or the DPA frame. */
+  --selection: #2f6fd0;
+  --plan-a: #e4572e;
+  --plan-b: #2a7f7f;
+  --plan-c: #b9822e;
+  --radius: 14px;
   --space-surface: var(--surface);
-  --space-surface-alt: var(--surface);
+  --space-surface-alt: var(--surface-alt);
   --space-muted: var(--dim);
   --space-border: var(--border);
   --space-accent: var(--accent);
@@ -46,47 +54,172 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #141816;
-    --surface: #1e2421;
-    --text: #eef2ef;
-    --dim: #9fb0a7;
-    --border: #2e3833;
-    --accent: #2dd4bf;
+    --bg: #131927;
+    --surface: #1e2740;
+    --surface-alt: #28324f;
+    --text: #edf0f7;
+    --dim: #9aa5bd;
+    --border: #39466a;
+    --accent: #ff7a52;
+    --accent-text: #1c1008;
+    --selection: #7aa7ff;
+    --plan-a: #ff7a52;
+    --plan-b: #45b3a6;
+    --plan-c: #e0aa4e;
   }
 }
 
-body {
-  font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", system-ui, sans-serif;
+/* Rounded Japanese gothic for headings and plan titles. */
+.font-display {
+  font-family: "Hiragino Maru Gothic ProN", "Hiragino Maru Gothic Pro",
+    "Hiragino Sans", system-ui, sans-serif;
 }
 
-/* 地図ピン（map_helpers の marker が使う） */
+/* Plan map: the attribution (copyright) stays in the map's
+   bottom-right corner (its default), lifted above the 現在地 button
+   that occupies the corner's bottom edge (owner's layout). Both map
+   engines anchor the corner container at the map's bottom edge and
+   float the control inside it, so padding the corner's bottom raises
+   the control by the button's height (~30px) plus a small gap.
+   Scoped to the plan map's container (.plan-map) so no other map is
+   affected; the two-class selectors outrank the engines' own
+   single-class corner rules regardless of load order. */
+.plan-map .maplibregl-ctrl-bottom-right {
+  padding-bottom: 34px;
+}
+.plan-map .leaflet-bottom.leaflet-right {
+  padding-bottom: 34px;
+}
+
+/* Leaflet confines its panes and controls with large internal
+   z-indexes (up to 1000); isolating the map container keeps those
+   inside the map, so the app's own overlay controls (地図表示
+   toggle, basemap toggle, 現在地 button) always paint above it. */
+.plan-map.leaflet-container {
+  isolation: isolate;
+}
+
+/* Leaflet divIcon wrapper for the numbered pins: the visible pin is
+   the .pin element inside, so the wrapper itself stays invisible
+   (Leaflet's own .leaflet-div-icon white box is not used). */
+.pin-marker {
+  background: transparent;
+  border: none;
+}
+
+/* Numbered map pins (rendered by the map control's marker callback). */
 .pin {
-  display: flex;
-  align-items: center;
-  justify-content: center;
   width: 26px;
   height: 26px;
   border-radius: 9999px;
-  background: #0f766e;
+  background: var(--pin-color, #e4572e);
   color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-size: 13px;
   font-weight: 700;
+  line-height: 1;
   border: 2px solid #fff;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 1px 5px rgba(20, 24, 40, 0.45);
 }
 .pin--on {
-  background: #e4572e;
-  transform: scale(1.2);
+  transform: scale(1.3);
 }
+
+/* Timeline row highlighted when its pin is selected on the map.
+   Blue (--selection), never the accent orange: the DPA購入 cards
+   carry a permanent orange border, so an orange selection outline
+   read as just another DPA row (owner report). The tinted
+   background backs the outline so the selected row reads at a
+   glance even where its own border is already coloured. */
 .map-selected {
-  background: rgba(15, 118, 110, 0.1);
-  outline: 2px solid #0f766e;
+  outline: 2px solid var(--selection);
   outline-offset: -2px;
+  background: color-mix(in srgb, var(--selection) 9%, var(--surface));
+}
+
+/* Animated "AI is thinking" dots (chat bubble + status bar). */
+.typing-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  background: var(--accent);
+  animation: typing-bounce 1.2s ease-in-out infinite;
+}
+.typing-dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.typing-dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes typing-bounce {
+  0%, 60%, 100% {
+    transform: translateY(0);
+    opacity: 0.45;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .typing-dot {
+    animation: none;
+  }
+}
+
+/* While a tab strip is being drag-scrolled with the mouse (class
+   toggled by useDragScroll in App.tsx). */
+.drag-scrolling {
+  cursor: grabbing !important;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 /* Phone tap targets: at least 32px tall. */
 @layer base {
   button, [role="button"], select, summary, input:not([type="checkbox"], [type="radio"]) {
     min-height: 2rem;
+  }
+
+  /* The page itself never scrolls sideways on a phone: wide content is
+     confined to its own scroll region (tab strip, plan sub-tabs). */
+  html, body {
+    overflow-x: hidden;
+  }
+
+  /* Pull-to-refresh and scroll chaining are off: overscroll at the top or
+     bottom of a panel must not reach the page (which would reload the app)
+     or leak into the panels behind it. Verified on device in the test copy
+     before being applied here. */
+  html, body {
+    overscroll-behavior: none;
+  }
+  .overflow-y-auto {
+    overscroll-behavior-y: none;
+  }
+
+  /* Date/time inputs carry a browser-imposed minimum width that can push
+     a grid column past the phone viewport; let them shrink to the cell
+     and never exceed it. */
+  input[type="date"], input[type="time"] {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  /* Phone widths only: mobile WebKit sizes native date/time inputs by
+     their intrinsic picker width and will not shrink the box below it,
+     so the field juts past its cell (and gets clipped at the screen
+     edge) no matter what width/min-width the layout asks for. Dropping
+     the native appearance lets the box follow the layout like every
+     other input; tapping the field still opens the platform's native
+     date/time picker. Desktop keeps the native appearance (and its
+     picker indicator). */
+  @media (max-width: 639px) {
+    input[type="date"], input[type="time"] {
+      -webkit-appearance: none;
+      appearance: none;
+    }
   }
 }

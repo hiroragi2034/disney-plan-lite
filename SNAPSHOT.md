@@ -1,5 +1,6 @@
-名前: 最小版 機能確定（2026-11-24）
-仕様書: disney-plan-lite-spec.md（この版から構築した）
-コード: client/ server/ drizzle/ space.json（スラッグ disney-plan-lite、版 v1）
-データ: app.db（テスト用の3セット・会話・実行の記録を含む）
-確認: 会話の確認項目1〜7 全て期待どおり（lite-copy-conversation-tests.md）
+名前: 最小版 UI反映（2026-11-24）
+仕様書: disney-plan-lite-spec.md（第15節「画面の部品」を追加した版。sha256 905d09da2a2817a0043f20ca840ebee38564909177a25cfa61f74b307d8a62b0）
+部品: ui-parts/（本家の画面側から切り出した17部品と PARTS.md）
+コード: client/ server/ drizzle/ space.json（スラッグ disney-plan-lite、本家の部品どおりに画面を作り替えた版）
+データ: app.db（プランセット3件・会話20件・施設75を含む）
+確認: 機能の会話チェック7件は前の節目で全て合格。画面は部品ごとに移植し、theme.css はバイト単位で本家と一致。地図そのものの表示は確認環境で外部通信が遮断され未確認（静止画→文章の切り替えは確認済み）。本人の評価「ほぼ再現されている」（2026-11-24）。
